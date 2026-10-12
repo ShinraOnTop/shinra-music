@@ -1,9 +1,21 @@
+#define CAT1_NAME "_Shaiik0"
+#define CAT1_CODE "482917"
+#define CAT2_NAME "Toza"
+#define CAT2_CODE "731506"
+#define CAT3_NAME "ShiroOnMc"
+#define CAT3_CODE "295843"
+
+#define GH_USER   "ShinraOnTop"
+#define GH_REPO   "shinra-music"
+#define GH_DIR    "Musique"
+#define GH_BRANCH "main"
+#define GH_SRC    "ShinraMusic.c"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #ifndef IDC_HAND
 #define IDC_HAND MAKEINTRESOURCE(32649)
@@ -62,54 +74,55 @@ static HICON icoBig = NULL, icoSm = NULL;
 int WINAPI MultiByteToWideChar(UINT, DWORD, const char *, int, unsigned short *, int);
 int WINAPI WideCharToMultiByte(UINT, DWORD, const unsigned short *, int, char *, int, const char *, int *);
 
-#define GH_USER "ShinraOnTop"
-#define GH_REPO "shinra-music"
-#define GH_DIR  "Musique"
-
-#define PLAYLIST_URL "https://raw.githubusercontent.com/ShinraOnTop/shinra-music/main/playlist.txt"
-
 #define WIN_W    960
 #define WIN_H    620
 #define TITLE_H  34
-#define CODE_LEN 6
-#define CODE_TTL 900
-#define WEBHOOK_URL "https://discord.com/api/webhooks/1556328279894528093/rl1N5PPYzUSQ6s4fOZ6dYz3RlcsYKuH6FPbrtyaEtkGx0hBvHPgqKVesaP18mYLhdKx3"
+#define CODE_MAX 12
+#define MAX_CAT  6
 #define MAX_TR   2048
 #define ROWH     36
 #define VIS      9
 
 #define WM_DL_DONE  (WM_APP + 1)
 #define WM_PL_DONE  (WM_APP + 2)
+#define WM_CFG_DONE (WM_APP + 3)
 
 typedef DWORD (WINAPI *MCIFN)(const char *, char *, UINT, void *);
-typedef unsigned char (WINAPI *RNGFN)(void *, unsigned long);
 
 static MCIFN pMci = NULL;
 
-enum { SCR_CODE, SCR_LIST };
+enum { SCR_CATS, SCR_CODE, SCR_LIST };
 enum { H_NONE = -1, H_PREV = 5000, H_PLAY, H_NEXT, H_STOP, H_SEEK, H_VOL,
-       H_SHUF, H_REP, H_MIN, H_CLOSE };
+       H_SHUF, H_REP, H_MIN, H_CLOSE, H_BACK };
 
 typedef struct { char name[160]; char url[512]; } Track;
 typedef struct { char url[512]; char path[MAX_PATH]; int gen; } DlArg;
+typedef struct { char name[48]; char code[CODE_MAX + 1]; } Cat;
 
 static HWND    hwnd;
-static int     screen = SCR_CODE;
+static int     screen = SCR_CATS;
 static int     hot = H_NONE, drag = H_NONE;
 static HBITMAP bg = NULL;
 static int     bgW = 0, bgH = 0;
 static HFONT   fTitle, fBig, fMid, fMidB, fSm, fMono;
 static COLORREF accent;
 
-static char    codeInput[CODE_LEN + 2];
-static int     codeLen = 0, tries = 0, locked = 0;
+static char    codeInput[CODE_MAX + 2];
+static int     codeLen = 0;
 static char    info[160] = "";
-static char    curCode[CODE_LEN + 1];
 
-static RECT    btn[2];
+static Cat     cats[MAX_CAT];
+static Cat     cfgCats[MAX_CAT];
+static int     ncat = 0, cfgN = 0, selCat = 0;
+static int     catTries[MAX_CAT], catLocked[MAX_CAT];
+static char    catName[48] = "";
+static volatile int plBusy = 0;
+static char    cfgBuf[262144];
+
+static RECT    btn[MAX_CAT + 2];
 static int     nbtn = 0;
 static RECT    rList, rPlayer, rSeek, rVol, rPrev, rPlay, rNext, rStop, rShuf, rRep;
-static RECT    rNow, rMin, rClose;
+static RECT    rNow, rMin, rClose, rBack;
 
 static Track   tracks[MAX_TR];
 static int     ntracks = 0, scroll = 0, cur = -1;
@@ -205,68 +218,18 @@ static int hexv(char c)
     return -1;
 }
 
-static void urlName(const char *url, char *out, int outsz)
+static void urlEnc(const char *s, char *out, int outsz)
 {
-    const char *p = strrchr(url, '/');
-    char raw[300];
-    char *e;
     int n = 0;
-
-    p = p ? p + 1 : url;
-    while (*p && *p != '?' && *p != '#' && n < (int)sizeof raw - 1) {
-        if (*p == '%' && hexv(p[1]) >= 0 && hexv(p[2]) >= 0) {
-            raw[n++] = (char)(hexv(p[1]) * 16 + hexv(p[2]));
-            p += 3;
-        } else raw[n++] = *p++;
+    for (; *s && n < outsz - 4; s++) {
+        unsigned char c = (unsigned char)*s;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~' || c == '/')
+            out[n++] = (char)c;
+        else
+            n += sprintf(out + n, "%%%02X", c);
     }
-    raw[n] = 0;
-    e = strrchr(raw, '.');
-    if (e) *e = 0;
-    utf8ToAnsi(raw, out, outsz);
-}
-
-static void parsePlaylist(char *buf)
-{
-    char *line = buf;
-
-    if ((unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF)
-        line += 3;
-    while (*line && tn < MAX_TR) {
-        char *nl = strpbrk(line, "\r\n");
-        char *p = line, *url, *bar, *q;
-        char name[300];
-        Track *t;
-
-        if (nl) *nl = 0;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p && *p != '#') {
-            name[0] = 0;
-            bar = strchr(p, '|');
-            if (bar) {
-                *bar = 0;
-                strncpy(name, p, sizeof name - 1);
-                name[sizeof name - 1] = 0;
-                url = bar + 1;
-            } else url = p;
-            while (*url == ' ' || *url == '\t') url++;
-            q = url + strlen(url);
-            while (q > url && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
-            q = name + strlen(name);
-            while (q > name && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
-
-            if (!strncmp(url, "http", 4) && !strchr(url, '"') && !strchr(url, ' ') &&
-                strlen(url) < sizeof t->url) {
-                t = &tracks[tn];
-                if (name[0]) utf8ToAnsi(name, t->name, sizeof t->name);
-                else urlName(url, t->name, sizeof t->name);
-                if (!t->name[0]) sprintf(t->name, "Titre %d", tn + 1);
-                strcpy(t->url, url);
-                tn++;
-            }
-        }
-        if (!nl) break;
-        line = nl + 1;
-    }
+    out[n] = 0;
 }
 
 static void jsonStrU8(const char *s, char *out, int outsz)
@@ -355,49 +318,84 @@ static void parseGithub(char *buf)
     }
 }
 
+static int cfgGet(const char *buf, int n, const char *field, char *out, int outsz)
+{
+    char key[48];
+    const char *p, *e;
+    int i, len;
+
+    sprintf(key, "#define CAT%d_%s \"", n, field);
+    p = strstr(buf, key);
+    if (!p) return 0;
+    p += strlen(key);
+    e = strchr(p, '"');
+    if (!e) return 0;
+    len = (int)(e - p);
+    if (len <= 0 || len >= outsz) return 0;
+    for (i = 0; i < len; i++) if ((unsigned char)p[i] < 32) return 0;
+    memcpy(out, p, len);
+    out[len] = 0;
+    return 1;
+}
+
+static DWORD WINAPI cfgThread(LPVOID unused)
+{
+    char cmd[500];
+    int n;
+    (void)unused;
+
+    cfgN = 0;
+    sprintf(cmd, "curl.exe -s -L -m 15 \"https://raw.githubusercontent.com/%s/%s/%s/%s\"",
+            GH_USER, GH_REPO, GH_BRANCH, GH_SRC);
+    if (runCapture(cmd, cfgBuf, sizeof cfgBuf) == 0 && cfgBuf[0]) {
+        for (n = 1; n <= MAX_CAT; n++) {
+            Cat *c = &cfgCats[cfgN];
+            if (!cfgGet(cfgBuf, n, "NAME", c->name, sizeof c->name)) break;
+            if (!cfgGet(cfgBuf, n, "CODE", c->code, sizeof c->code)) break;
+            cfgN++;
+        }
+    }
+    PostMessageA(hwnd, WM_CFG_DONE, 0, 0);
+    return 0;
+}
+
 static DWORD WINAPI plThread(LPVOID unused)
 {
-    char cmd[700];
+    char cmd[1500], raw[200], enc[600];
     (void)unused;
 
     tn = 0;
     plErr[0] = 0;
-    if (!strstr(GH_USER, "TONPSEUDO")) {
-        sprintf(cmd, "curl.exe -s -L -m 25 -H \"User-Agent: ShinraMusic\" "
-                     "-H \"Accept: application/vnd.github+json\" "
-                     "\"https://api.github.com/repos/%s/%s/contents%s%s\"",
-                GH_USER, GH_REPO, sizeof(GH_DIR) > 1 ? "/" : "", GH_DIR);
-        if (runCapture(cmd, netBuf, sizeof netBuf) != 0 || !netBuf[0]) {
-            strcpy(plErr, "GitHub injoignable (internet ?)");
-            goto done;
-        }
-        compactJson(netBuf);
-        parseGithub(netBuf);
-        if (tn == 0) {
-            if (strstr(netBuf, "rate limit"))
-                strcpy(plErr, "Limite GitHub atteinte (r\xe9" "essaie dans un moment)");
-            else if (strstr(netBuf, "\"message\""))
-                strcpy(plErr, "D\xe9p\xf4t ou dossier introuvable (d\xe9p\xf4t public ? noms exacts ?)");
-            else
-                strcpy(plErr, "Aucune musique (mp3, wav, m4a, wma) dans ce dossier");
-        }
+    if (strstr(GH_USER, "TONPSEUDO")) {
+        strcpy(plErr, "Renseigne GH_USER et GH_REPO en haut de ShinraMusic.c");
         goto done;
     }
-    if (strstr(PLAYLIST_URL, "TONPSEUDO")) {
-        strcpy(plErr, "Renseigne GH_USER et GH_REPO au d\xe9" "but de musicbox.c");
-        goto done;
-    }
-    sprintf(cmd, "curl.exe -s -L -m 25 \"%s\"", PLAYLIST_URL);
+    if (GH_DIR[0]) sprintf(raw, "%s/%s", GH_DIR, catName);
+    else           strcpy(raw, catName);
+    urlEnc(raw, enc, sizeof enc);
+    sprintf(cmd, "curl.exe -s -L -m 25 -H \"User-Agent: ShinraMusic\" "
+                 "-H \"Accept: application/vnd.github+json\" "
+                 "\"https://api.github.com/repos/%s/%s/contents/%s\"",
+            GH_USER, GH_REPO, enc);
     if (runCapture(cmd, netBuf, sizeof netBuf) != 0 || !netBuf[0]) {
-        strcpy(plErr, "Playlist injoignable (internet ? lien ?)");
+        strcpy(plErr, "GitHub injoignable (internet ?)");
         goto done;
     }
-    parsePlaylist(netBuf);
-    if (tn == 0) strcpy(plErr, "Playlist vide ou mal form\xe9" "e (lien correct ?)");
+    compactJson(netBuf);
+    parseGithub(netBuf);
+    if (tn == 0) {
+        if (strstr(netBuf, "rate limit"))
+            strcpy(plErr, "Limite GitHub atteinte (r\xe9" "essaie dans un moment)");
+        else if (strstr(netBuf, "\"message\""))
+            strcpy(plErr, "D\xe9p\xf4t ou dossier introuvable (d\xe9p\xf4t public ? noms exacts ?)");
+        else
+            strcpy(plErr, "Aucune musique (mp3, wav, m4a, wma) dans ce dossier");
+    }
 
 done:
     ntracks = tn;
     plState = tn > 0 ? 1 : 2;
+    plBusy = 0;
     PostMessageA(hwnd, WM_PL_DONE, (WPARAM)tn, 0);
     return 0;
 }
@@ -420,81 +418,48 @@ static DWORD WINAPI dlThread(LPVOID p)
     return 0;
 }
 
-static unsigned long codeTime = 0;
-static int codeUsed = 0;
-
-static int postWebhook(const char *text)
+static void addCat(const char *name, const char *code)
 {
-    char cmd[2600];
-    sprintf(cmd,
-        "curl.exe -s -m 15 -o NUL "
-        "-H \"Content-Type: application/json\" "
-        "-d \"{\\\"content\\\":\\\"%s\\\"}\" \"%s\"",
-        text, WEBHOOK_URL);
-    return WinExec(cmd, SW_HIDE) > 31;
+    if (ncat >= MAX_CAT) return;
+    strncpy(cats[ncat].name, name, sizeof cats[ncat].name - 1);
+    cats[ncat].name[sizeof cats[ncat].name - 1] = 0;
+    strncpy(cats[ncat].code, code, CODE_MAX);
+    cats[ncat].code[CODE_MAX] = 0;
+    ncat++;
 }
 
-static int secureRandom(unsigned char *buf, unsigned long n)
+static void initCats(void)
 {
-    HMODULE a = LoadLibraryA("advapi32.dll");
-    RNGFN f = a ? (RNGFN)GetProcAddress(a, "SystemFunction036") : NULL;
-    return f ? f(buf, n) : 0;
+    ncat = 0;
+#ifdef CAT1_NAME
+    addCat(CAT1_NAME, CAT1_CODE);
+#endif
+#ifdef CAT2_NAME
+    addCat(CAT2_NAME, CAT2_CODE);
+#endif
+#ifdef CAT3_NAME
+    addCat(CAT3_NAME, CAT3_CODE);
+#endif
+#ifdef CAT4_NAME
+    addCat(CAT4_NAME, CAT4_CODE);
+#endif
+#ifdef CAT5_NAME
+    addCat(CAT5_NAME, CAT5_CODE);
+#endif
+#ifdef CAT6_NAME
+    addCat(CAT6_NAME, CAT6_CODE);
+#endif
 }
 
-static void genCode(void)
+static COLORREF catColor(int i)
 {
-    unsigned char rb[CODE_LEN];
-    LARGE_INTEGER q;
-    int i, ok;
-
-    QueryPerformanceCounter(&q);
-    srand((unsigned)(time(NULL) ^ q.LowPart ^ (GetCurrentProcessId() << 16) ^ GetTickCount()));
-    ok = secureRandom(rb, CODE_LEN);
-    for (i = 0; i < CODE_LEN; i++) curCode[i] = (char)('0' + (ok ? rb[i] % 10 : rand() % 10));
-    curCode[CODE_LEN] = 0;
-    codeTime = (unsigned long)time(NULL);
-    codeUsed = 0;
+    static const int c[MAX_CAT][3] = {
+        {255, 70, 130}, {80, 170, 255}, {90, 220, 140},
+        {255, 170, 60}, {170, 110, 255}, {240, 220, 80}
+    };
+    i = (i < 0 ? 0 : i) % MAX_CAT;
+    return RGB(c[i][0], c[i][1], c[i][2]);
 }
-
-static void sendCode(void)
-{
-    char msg[160];
-    if (GetFileAttributesA("C:\\Windows\\System32\\curl.exe") == INVALID_FILE_ATTRIBUTES) {
-        strcpy(info, "Envoi du code impossible (curl.exe introuvable)");
-        return;
-    }
-    sprintf(msg, "Code ShinraMusic : %s (15 min, 1 usage)", curCode);
-    if (!postWebhook(msg)) strcpy(info, "Envoi du code impossible");
-}
-
-static void notifyValidated(void)
-{
-    char pc[64] = "", clean[48];
-    char msg[256];
-    DWORD n = sizeof pc;
-    int i, k = 0;
-
-    if (!GetComputerNameA(pc, &n)) strcpy(pc, "inconnu");
-    for (i = 0; pc[i] && k < 40; i++) {
-        char c = pc[i];
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_')
-            clean[k++] = c;
-    }
-    clean[k] = 0;
-    sprintf(msg, "Code %s valid\\u00e9 \\u2705 (PC : %s)", curCode, clean[0] ? clean : "inconnu");
-    postWebhook(msg);
-}
-
-static int checkCode(const char *in, char *why)
-{
-    if (strcmp(curCode, in) != 0)                           { strcpy(why, "Code incorrect");       return 0; }
-    if (codeUsed)                                           { strcpy(why, "Code deja utilise");    return 0; }
-    if ((unsigned long)time(NULL) - codeTime > CODE_TTL)    { strcpy(why, "Code expire (15 min)"); return 0; }
-    codeUsed = 1;
-    return 1;
-}
-
-static void lockCode(void) { codeUsed = 1; }
 
 static void mci(const char *cmd, char *ret, int n)
 {
@@ -623,6 +588,42 @@ static void seekTo(int x)
     mci(cmd, NULL, 0);
     paused = 0;
     playing = 1;
+}
+
+static void startPlaylist(void)
+{
+    HANDLE th;
+    stopTrack();
+    ntracks = 0; tn = 0; scroll = 0; cur = -1;
+    plState = 0;
+    plErr[0] = 0;
+    playErr[0] = 0;
+    plBusy = 1;
+    th = CreateThread(NULL, 0, plThread, NULL, 0, NULL);
+    if (th) CloseHandle(th);
+    else { plBusy = 0; strcpy(plErr, "Erreur interne (thread)"); plState = 2; }
+}
+
+static void goBack(void)
+{
+    stopTrack();
+    screen = SCR_CATS;
+    accent = RGB(255, 70, 130);
+    codeLen = 0; codeInput[0] = 0;
+    info[0] = 0;
+    drag = H_NONE;
+    hot = H_NONE;
+}
+
+static void enterCat(int i)
+{
+    if (i < 0 || i >= ncat) return;
+    selCat = i;
+    codeLen = 0; codeInput[0] = 0;
+    info[0] = 0;
+    if (catLocked[i]) strcpy(info, "Trop d'essais : relance l'application");
+    accent = catColor(i);
+    screen = SCR_CODE;
 }
 
 static HFONT mkfont(int h, int bold, const char *face)
@@ -832,15 +833,24 @@ static void fmtTime(int ms, char *out)
 
 static void layout(void)
 {
+    int i;
     nbtn = 0;
 
     rMin.left = WIN_W - 84;   rMin.top = 4; rMin.right = WIN_W - 56;   rMin.bottom = 30;
     rClose.left = WIN_W - 50; rClose.top = 4; rClose.right = WIN_W - 22; rClose.bottom = 30;
 
-    if (screen == SCR_CODE) {
+    if (screen == SCR_CATS) {
+        for (i = 0; i < ncat; i++) {
+            btn[i].left = 260; btn[i].right = 700;
+            btn[i].top = 190 + i * 64; btn[i].bottom = btn[i].top + 52;
+        }
+        nbtn = ncat;
+    } else if (screen == SCR_CODE) {
         btn[0].left = 380; btn[0].top = 400; btn[0].right = 580; btn[0].bottom = 448;
-        nbtn = 1;
+        btn[1].left = 380; btn[1].top = 460; btn[1].right = 580; btn[1].bottom = 508;
+        nbtn = 2;
     } else if (screen == SCR_LIST) {
+        rBack.left = 760; rBack.top = 62; rBack.right = 900; rBack.bottom = 104;
         rList.left = 60;  rList.top = 120; rList.right = 560; rList.bottom = 470;
         rNow.left = 580;  rNow.top = 120; rNow.right = 900; rNow.bottom = 470;
         rPlayer.left = 60; rPlayer.top = 486; rPlayer.right = 900; rPlayer.bottom = 598;
@@ -855,30 +865,48 @@ static void layout(void)
     }
 }
 
+static void drawCatScreen(HDC d)
+{
+    int i;
+
+    txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, accent, DT_CENTER | DT_SINGLELINE);
+    txt(d, "Choisis ta categorie", 0, 148, WIN_W, 28, fMid, RGB(220, 220, 235), DT_CENTER | DT_SINGLELINE);
+
+    for (i = 0; i < ncat; i++)
+        card(d, &btn[i], cats[i].name, catColor(i), hot == i);
+}
+
 static void drawCodeScreen(HDC d)
 {
     char show[64];
     RECT box;
-    int i, p = 0;
+    int i, p = 0, lim, sep;
 
-    txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, RGB(255, 70, 130), DT_CENTER | DT_SINGLELINE);
+    if (selCat < 0 || selCat >= ncat) return;
 
-    box.left = 250; box.top = 250; box.right = 710; box.bottom = 340;
-    panel(d, &box, RGB(255, 70, 130), 190, 3);
+    txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, accent, DT_CENTER | DT_SINGLELINE);
+    txtShadow(d, cats[selCat].name, 0, 150, WIN_W, 44, fBig, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
+    txt(d, "Entre ton code d'acces", 0, 200, WIN_W, 28, fMid, RGB(220, 220, 235), DT_CENTER | DT_SINGLELINE);
 
-    for (i = 0; i < CODE_LEN; i++) {
-        show[p++] = i < codeLen ? codeInput[i] : '_';
+    box.left = 180; box.top = 250; box.right = 780; box.bottom = 340;
+    panel(d, &box, accent, 190, 3);
+
+    lim = (int)strlen(cats[selCat].code);
+    sep = lim <= 8 ? 2 : 1;
+    for (i = 0; i < lim && p < 56; i++) {
+        show[p++] = i < codeLen ? '*' : '_';
         show[p++] = ' ';
-        show[p++] = ' ';
+        if (sep == 2) show[p++] = ' ';
     }
     show[p] = 0;
     txt(d, show, box.left, box.top, box.right - box.left, box.bottom - box.top,
         fMono, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    card(d, &btn[0], "VALIDER", RGB(255, 70, 130), hot == 0);
+    card(d, &btn[0], "VALIDER", accent, hot == 0);
+    card(d, &btn[1], "RETOUR", RGB(140, 140, 170), hot == 1);
 
     if (info[0])
-        txt(d, info, 0, 470, WIN_W, 30, fMid, RGB(255, 110, 110), DT_CENTER | DT_SINGLELINE);
+        txt(d, info, 0, 520, WIN_W, 30, fMid, RGB(255, 110, 110), DT_CENTER | DT_SINGLELINE);
 }
 
 static void drawNow(HDC d)
@@ -933,7 +961,10 @@ static void drawList(HDC d)
     char buf[300], num[16], t1[16], t2[16];
     RECT row;
 
-    txtShadow(d, "Music", 60, 38, 640, 44, fBig, accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    txtShadow(d, catName, 60, 38, 640, 44, fBig, accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    alphaRectR(d, &rBack, RGB(255, 255, 255), hot == H_BACK ? 85 : 35, 10);
+    txt(d, "< RETOUR", rBack.left, rBack.top, rBack.right - rBack.left, rBack.bottom - rBack.top,
+        fMidB, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     panel(d, &rList, accent, 165, 2);
 
@@ -1089,6 +1120,7 @@ static void draw(HDC d, int w, int h)
     alphaRect(d, &full, RGB(5, 5, 15), 120);
     layout();
     switch (screen) {
+    case SCR_CATS: drawCatScreen(d);  break;
     case SCR_CODE: drawCodeScreen(d); break;
     case SCR_LIST: drawList(d);       break;
     }
@@ -1103,10 +1135,12 @@ static int PT(const RECT *r, int x, int y)
 static int hitTest(int x, int y)
 {
     int i;
+    layout();
     if (PT(&rMin, x, y))   return H_MIN;
     if (PT(&rClose, x, y)) return H_CLOSE;
     for (i = 0; i < nbtn; i++) if (PT(&btn[i], x, y)) return i;
     if (screen == SCR_LIST) {
+        if (PT(&rBack, x, y)) return H_BACK;
         if (PT(&rPrev, x, y)) return H_PREV;
         if (PT(&rPlay, x, y)) return H_PLAY;
         if (PT(&rNext, x, y)) return H_NEXT;
@@ -1131,22 +1165,27 @@ static void volFromX(int x)
 
 static void submitCode(void)
 {
-    char why[64];
-    if (locked) return;
-    if (codeLen != CODE_LEN) { strcpy(info, "Code incomplet"); return; }
-    if (checkCode(codeInput, why)) {
+    const char *good;
+    if (selCat < 0 || selCat >= ncat) return;
+    if (catLocked[selCat]) { strcpy(info, "Trop d'essais : relance l'application"); return; }
+    good = cats[selCat].code;
+    if (codeLen != (int)strlen(good)) { strcpy(info, "Code incomplet"); return; }
+    if (plBusy) { strcpy(info, "Chargement en cours, patiente un instant..."); return; }
+    if (strcmp(codeInput, good) == 0) {
         info[0] = 0;
-        notifyValidated();
-        screen = SCR_LIST;
-    } else {
-        tries++;
+        strcpy(catName, cats[selCat].name);
+        accent = catColor(selCat);
         codeLen = 0; codeInput[0] = 0;
-        if (tries >= 5) {
-            lockCode();
-            locked = 1;
+        screen = SCR_LIST;
+        startPlaylist();
+    } else {
+        catTries[selCat]++;
+        codeLen = 0; codeInput[0] = 0;
+        if (catTries[selCat] >= 5) {
+            catLocked[selCat] = 1;
             strcpy(info, "Trop d'essais : relance l'application");
         } else {
-            strcpy(info, why);
+            strcpy(info, "Code incorrect");
         }
     }
 }
@@ -1157,10 +1196,14 @@ static void onClick(int id, int x)
     if (id == H_CLOSE) { PostMessageA(hwnd, WM_CLOSE, 0, 0); return; }
     if (id == H_MIN)   { ShowWindow(hwnd, SW_MINIMIZE); return; }
 
-    if (screen == SCR_CODE) {
+    if (screen == SCR_CATS) {
+        if (id >= 0 && id < ncat) enterCat(id);
+    } else if (screen == SCR_CODE) {
         if (id == 0) submitCode();
+        else if (id == 1) goBack();
     } else if (screen == SCR_LIST) {
-        if (id >= 100 && id < 100 + MAX_TR) playTrack(id - 100);
+        if (id == H_BACK) goBack();
+        else if (id >= 100 && id < 100 + MAX_TR) playTrack(id - 100);
         else if (id == H_PLAY) togglePlay();
         else if (id == H_PREV) prevTrack();
         else if (id == H_NEXT) nextTrack();
@@ -1240,14 +1283,22 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_CHAR:
-        if (screen == SCR_CODE && !locked) {
+        if (screen == SCR_CATS) {
             char c = (char)wp;
-            if (c == '\r') submitCode();
-            else if (c == '\b') { if (codeLen > 0) codeInput[--codeLen] = 0; }
-            else if (codeLen < CODE_LEN && c >= '0' && c <= '9') {
-                codeInput[codeLen++] = c;
-                codeInput[codeLen] = 0;
-                info[0] = 0;
+            if (c >= '1' && c <= '9') enterCat(c - '1');
+            InvalidateRect(h, NULL, FALSE);
+        } else if (screen == SCR_CODE && selCat >= 0 && selCat < ncat) {
+            char c = (char)wp;
+            int lim = (int)strlen(cats[selCat].code);
+            if (c == 27) goBack();
+            else if (!catLocked[selCat]) {
+                if (c == '\r') submitCode();
+                else if (c == '\b') { if (codeLen > 0) codeInput[--codeLen] = 0; }
+                else if (codeLen < lim && c > 32 && c < 127) {
+                    codeInput[codeLen++] = c;
+                    codeInput[codeLen] = 0;
+                    info[0] = 0;
+                }
             }
             InvalidateRect(h, NULL, FALSE);
         }
@@ -1262,6 +1313,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             else if (wp == VK_DOWN) setVolume(volume - 50);
             else if (wp == 'S') shuffle = !shuffle;
             else if (wp == 'R') repeat = !repeat;
+            else if (wp == VK_ESCAPE) goBack();
             InvalidateRect(h, NULL, FALSE);
         }
         return 0;
@@ -1273,6 +1325,21 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             else {
                 strcpy(playErr, "T\xe9l\xe9" "chargement impossible (lien ou connexion ?)");
                 if (tmpPath[0]) { remove(tmpPath); tmpPath[0] = 0; }
+            }
+        }
+        InvalidateRect(h, NULL, FALSE);
+        return 0;
+
+    case WM_CFG_DONE:
+        if (cfgN > 0) {
+            int i;
+            for (i = 0; i < cfgN; i++) cats[i] = cfgCats[i];
+            ncat = cfgN;
+            if (screen == SCR_CODE) {
+                screen = SCR_CATS;
+                accent = RGB(255, 70, 130);
+                codeLen = 0; codeInput[0] = 0;
+                info[0] = 0;
             }
         }
         InvalidateRect(h, NULL, FALSE);
@@ -1343,8 +1410,8 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
     fSm    = mkfont(15, 0, "Segoe UI");
     fMono  = mkfont(40, 1, "Consolas");
 
-    genCode();
-    sendCode();
+    srand((unsigned)GetTickCount());
+    initCats();
 
     icoBig = (HICON)LoadImageA(hi, MAKEINTRESOURCE(1), IMAGE_ICON,
                                GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
@@ -1384,9 +1451,10 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
     UpdateWindow(hwnd);
     SetTimer(hwnd, 1, 150, NULL);
 
-    th = CreateThread(NULL, 0, plThread, NULL, 0, NULL);
-    if (th) CloseHandle(th);
-    else { strcpy(plErr, "Erreur interne (thread)"); plState = 2; }
+    if (!strstr(GH_USER, "TONPSEUDO")) {
+        th = CreateThread(NULL, 0, cfgThread, NULL, 0, NULL);
+        if (th) CloseHandle(th);
+    }
 
     while (GetMessageA(&ms, NULL, 0, 0) > 0) {
         TranslateMessage(&ms);
