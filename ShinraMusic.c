@@ -5,8 +5,8 @@
 #define CAT3_NAME "ShiroOnMc"
 #define CAT3_CODE "295843"
 
-#define GH_USER   "TONPSEUDO"
-#define GH_REPO   "TONREPO"
+#define GH_USER   "ShinraOnTop"
+#define GH_REPO   "shinra-music"
 #define GH_DIR    "musique"
 #define GH_BRANCH "main"
 #define GH_SRC    "ShinraMusic.c"
