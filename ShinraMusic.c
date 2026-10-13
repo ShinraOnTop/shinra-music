@@ -1,5 +1,5 @@
 #define CAT1_NAME "_Shaiik0"
-#define CAT1_CODE "482917"
+#define CAT1_CODE "932893"
 #define CAT2_NAME "Toza"
 #define CAT2_CODE "731506"
 #define CAT3_NAME "ShiroOnMc"
