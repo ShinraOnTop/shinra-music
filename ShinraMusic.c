@@ -308,13 +308,31 @@ static void compactJson(char *s)
     *w = 0;
 }
 
+/* Encode espaces, accents, crochets... d'une URL brute (garde les % deja presents) */
+static int urlFix(const char *s, char *out, int outsz)
+{
+    int n = 0;
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (n > outsz - 4) { out[0] = 0; return 0; }
+        if (c <= 32 || c >= 127 || c == '"' || c == '[' || c == ']' || c == '{' ||
+            c == '}' || c == '|' || c == '\\' || c == '^' || c == '`' ||
+            c == '<' || c == '>' || c == '#')
+            n += sprintf(out + n, "%%%02X", c);
+        else
+            out[n++] = (char)c;
+    }
+    out[n] = 0;
+    return 1;
+}
+
 static void parseGithub(char *buf)
 {
     char *pos = buf;
 
     while (tn < MAX_TR && (pos = strstr(pos, "\"name\":\"")) != NULL) {
         char *nm = pos + 8, *u, *nx, *dot;
-        char nameU8[300], url[512];
+        char nameU8[300], url[512], rawUrl[512];
         Track *t;
 
         pos = nm;
@@ -323,7 +341,8 @@ static void parseGithub(char *buf)
         nx = strstr(nm, "\"name\":\"");
         if (nx && nx < u) continue;
         jsonStrU8(nm, nameU8, sizeof nameU8);
-        jsonStrU8(u + 16, url, sizeof url);
+        jsonStrU8(u + 16, rawUrl, sizeof rawUrl);
+        if (!urlFix(rawUrl, url, sizeof url)) continue;
         dot = strrchr(nameU8, '.');
         if (!dot || !(!lstrcmpiA(dot, ".mp3") || !lstrcmpiA(dot, ".wav") ||
                       !lstrcmpiA(dot, ".m4a") || !lstrcmpiA(dot, ".wma")))
