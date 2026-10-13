@@ -1,0 +1,45 @@
+name: Build ShinraMusic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ShinraMusic.c
+      - icone.ico
+      - .github/workflows/build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+
+      - name: Compiler
+        shell: msys2 {0}
+        run: |
+          if [ -f icone.ico ]; then
+            echo '1 ICON "icone.ico"' > app.rc
+            windres app.rc -O coff -o app.o
+            gcc -O2 -static -mwindows -DAPP_BUILD=${{ github.run_number }} ShinraMusic.c app.o -o ShinraMusic.exe -luser32 -lgdi32 -lkernel32
+          else
+            gcc -O2 -static -mwindows -DAPP_BUILD=${{ github.run_number }} ShinraMusic.c -o ShinraMusic.exe -luser32 -lgdi32 -lkernel32
+          fi
+          echo ${{ github.run_number }} > version.txt
+
+      - name: Publier
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" ShinraMusic.exe version.txt \
+            --title "ShinraMusic build ${{ github.run_number }}" \
+            --notes "Build automatique" --latest
