@@ -804,12 +804,14 @@ static void alphaRect(HDC d, const RECT *r, COLORREF c, int a)
     alphaRectR(d, r, c, a, 0);
 }
 
+static COLORREF mixCol(COLORREF a, COLORREF b, int pct);
+
 static void panel(HDC d, const RECT *pr, COLORREF border, int a, int bw)
 {
     RECT r = *pr;
     HPEN p;
     HGDIOBJ op, ob;
-    alphaRectR(d, &r, RGB(10, 10, 22), a, 9);
+    alphaRectR(d, &r, mixCol(accent, RGB(0, 0, 0), 93), a, 9);
 
     p = CreatePen(PS_SOLID, bw, border);
     op = SelectObject(d, p);
@@ -876,7 +878,8 @@ static void card(HDC d, const RECT *pr, const char *label, COLORREF col, int isH
 {
     RECT r = *pr;
     RECT stripe;
-    panel(d, &r, isHot ? RGB(255, 255, 255) : mixCol(col, RGB(0, 0, 0), 35), isHot ? 215 : 150, isHot ? 3 : 2);
+    panel(d, &r, isHot ? col : mixCol(col, RGB(0, 0, 0), 50), isHot ? 200 : 150, 2);
+    if (isHot) alphaRectR(d, &r, col, 55, 9);
     stripe.left = r.left + 14; stripe.right = r.left + (isHot ? 24 : 19);
     stripe.top = r.top + 12;   stripe.bottom = r.bottom - 12;
     alphaRect(d, &stripe, col, 255);
@@ -983,9 +986,12 @@ static void layout(void)
 static void drawCatScreen(HDC d)
 {
     int i;
+    RECT bar;
 
-    txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, accent, DT_CENTER | DT_SINGLELINE);
-    txt(d, "Choisis ta categorie", 0, 148, WIN_W, 28, fMid, RGB(220, 220, 235), DT_CENTER | DT_SINGLELINE);
+    txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
+    bar.left = WIN_W / 2 - 70; bar.right = WIN_W / 2 + 70; bar.top = 139; bar.bottom = 142;
+    alphaRect(d, &bar, accent, 255);
+    txt(d, "Choisis ta categorie", 0, 150, WIN_W, 28, fMid, RGB(230, 220, 220), DT_CENTER | DT_SINGLELINE);
 
     for (i = 0; i < ncat; i++)
         card(d, &btn[i], cats[i].name, accent, hot == i);
@@ -1037,7 +1043,7 @@ static void drawCodeScreen(HDC d)
 
     for (i = 0; i < lim; i++) {
         s.left = x0 + i * (sw + gap); s.right = s.left + sw; s.top = y0; s.bottom = y0 + 56;
-        alphaRectR(d, &s, RGB(255, 255, 255), i < codeLen ? 55 : 25, 10);
+        alphaRectR(d, &s, accent, i < codeLen ? 80 : 30, 10);
         if (i == codeLen) edge = accent;
         else if (i < codeLen) edge = mixCol(accent, RGB(0, 0, 0), 20);
         else edge = mixCol(accent, RGB(0, 0, 0), 60);
@@ -1055,8 +1061,9 @@ static void drawCodeScreen(HDC d)
     if (info[0])
         txt(d, info, pn.left, 346, w, 26, fMid, RGB(255, 120, 120), DT_CENTER | DT_SINGLELINE);
 
-    pill(d, &btn[0], "VALIDER", mixCol(accent, RGB(0, 0, 0), 35), 215, hot == 0);
-    pill(d, &btn[1], "RETOUR", RGB(255, 255, 255), 40, hot == 1);
+    pill(d, &btn[0], "VALIDER", accent, 235, hot == 0);
+    pill(d, &btn[1], "RETOUR", RGB(0, 0, 0), 100, hot == 1);
+    frame(d, &btn[1], mixCol(accent, RGB(0, 0, 0), hot == 1 ? 0 : 55), 2, 46);
 
     txt(d, "Ctrl+V pour coller le code", pn.left, 494, w, 20, fSm, RGB(170, 170, 195), DT_CENTER | DT_SINGLELINE);
 }
@@ -1269,7 +1276,7 @@ static void draw(HDC d, int w, int h)
     full.left = 0; full.top = 0; full.right = w; full.bottom = h;
     SetBkMode(d, TRANSPARENT);
     drawBg(d, w, h);
-    alphaRect(d, &full, RGB(5, 5, 15), 120);
+    alphaRect(d, &full, RGB(0, 0, 0), 100);
     layout();
     switch (screen) {
     case SCR_CATS: drawCatScreen(d);  break;
@@ -1281,41 +1288,68 @@ static void draw(HDC d, int w, int h)
 
 static COLORREF bgAccent(void)
 {
-    BITMAP bm;
-    int x, y, step, bpp;
+    BITMAPINFO bi;
+    HDC scr, sdc, ddc;
+    HBITMAP db;
+    unsigned int *px = NULL;
+    int i, n = 64 * 40;
     double sr = 0, sg = 0, sb = 0, sw = 0, mx;
+    COLORREF res = RGB(230, 230, 245);
 
-    if (!bg) return RGB(230, 230, 245);
-    memset(&bm, 0, sizeof bm);
-    GetObjectA(bg, sizeof bm, &bm);
-    if (!bm.bmBits || bm.bmWidth <= 0 || bm.bmHeight <= 0 ||
-        (bm.bmBitsPixel != 24 && bm.bmBitsPixel != 32))
-        return RGB(230, 230, 245);
-    bpp = bm.bmBitsPixel / 8;
-    step = bm.bmWidth / 160;
-    if (step < 1) step = 1;
-    for (y = 0; y < bm.bmHeight; y += step) {
-        const unsigned char *row = (const unsigned char *)bm.bmBits + (size_t)y * bm.bmWidthBytes;
-        for (x = 0; x < bm.bmWidth; x += step) {
-            const unsigned char *px = row + x * bpp;
-            int b = px[0], g = px[1], r = px[2];
+    if (!bg || bgW <= 0 || bgH <= 0) return res;
+
+    memset(&bi, 0, sizeof bi);
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = 64;
+    bi.bmiHeader.biHeight = -40;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    scr = GetDC(NULL);
+    sdc = CreateCompatibleDC(scr);
+    ddc = CreateCompatibleDC(scr);
+    db = CreateDIBSection(scr, &bi, DIB_RGB_COLORS, (void **)&px, NULL, 0);
+
+    if (sdc && ddc && db && px) {
+        HGDIOBJ so, dobj;
+        dobj = SelectObject(ddc, db);
+        so = SelectObject(sdc, bg);
+        SetStretchBltMode(ddc, HALFTONE);
+        SetBrushOrgEx(ddc, 0, 0, NULL);
+        StretchBlt(ddc, 0, 0, 64, 40, sdc, 0, 0, bgW, bgH, SRCCOPY);
+        SelectObject(sdc, so);
+        SelectObject(ddc, dobj);
+        GdiFlush();
+
+        for (i = 0; i < n; i++) {
+            unsigned int p = px[i];
+            int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
             int hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
             int lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
             double w;
-            if (hi < 40) continue;
+            if (hi < 30) continue;
             w = (double)(hi - lo);
             w = w * w + 1.0;
             sr += r * w; sg += g * w; sb += b * w; sw += w;
         }
+        if (sw > 0) {
+            sr /= sw; sg /= sw; sb /= sw;
+            mx = sr > sg ? (sr > sb ? sr : sb) : (sg > sb ? sg : sb);
+            if (mx >= 1) {
+                sr = sr * 225.0 / mx * 0.92 + 20.0;
+                sg = sg * 225.0 / mx * 0.92 + 20.0;
+                sb = sb * 225.0 / mx * 0.92 + 20.0;
+                res = RGB((int)sr, (int)sg, (int)sb);
+            }
+        }
     }
-    if (sw <= 0) return RGB(230, 230, 245);
-    sr /= sw; sg /= sw; sb /= sw;
-    mx = sr > sg ? (sr > sb ? sr : sb) : (sg > sb ? sg : sb);
-    if (mx < 1) return RGB(230, 230, 245);
-    sr = sr * 225.0 / mx;
-    sg = sg * 225.0 / mx;
-    sb = sb * 225.0 / mx;
-    return RGB((int)sr, (int)sg, (int)sb);
+
+    if (db) DeleteObject(db);
+    if (sdc) DeleteDC(sdc);
+    if (ddc) DeleteDC(ddc);
+    ReleaseDC(NULL, scr);
+    return res;
 }
 
 static void loadBg(const char *path)
