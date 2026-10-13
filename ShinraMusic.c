@@ -5,11 +5,12 @@
 #define CAT3_NAME "ShiroOnMc"
 #define CAT3_CODE "295843"
 
-#define GH_USER   "ShinraOnTop"
-#define GH_REPO   "shinra-music"
-#define GH_DIR    "Musique"
+#define GH_USER   "TONPSEUDO"
+#define GH_REPO   "TONREPO"
+#define GH_DIR    "musique"
 #define GH_BRANCH "main"
 #define GH_SRC    "ShinraMusic.c"
+#define GH_BG     "fond.bmp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -86,6 +87,12 @@ int WINAPI WideCharToMultiByte(UINT, DWORD, const unsigned short *, int, char *,
 #define WM_DL_DONE  (WM_APP + 1)
 #define WM_PL_DONE  (WM_APP + 2)
 #define WM_CFG_DONE (WM_APP + 3)
+#define WM_BG_DONE  (WM_APP + 4)
+#define CLIP_TEXT   1
+
+#ifndef VK_INSERT
+#define VK_INSERT 0x2D
+#endif
 
 typedef DWORD (WINAPI *MCIFN)(const char *, char *, UINT, void *);
 
@@ -106,6 +113,7 @@ static HBITMAP bg = NULL;
 static int     bgW = 0, bgH = 0;
 static HFONT   fTitle, fBig, fMid, fMidB, fSm, fMono;
 static COLORREF accent;
+static char    bgTmp[MAX_PATH] = "";
 
 static char    codeInput[CODE_MAX + 2];
 static int     codeLen = 0;
@@ -359,6 +367,19 @@ static DWORD WINAPI cfgThread(LPVOID unused)
     return 0;
 }
 
+static DWORD WINAPI bgThread(LPVOID unused)
+{
+    char cmd[900];
+    int rc;
+    (void)unused;
+
+    sprintf(cmd, "curl.exe -s -L -m 60 -o \"%s\" \"https://raw.githubusercontent.com/%s/%s/%s/%s\"",
+            bgTmp, GH_USER, GH_REPO, GH_BRANCH, GH_BG);
+    rc = runCapture(cmd, NULL, 0);
+    PostMessageA(hwnd, WM_BG_DONE, (WPARAM)(rc == 0), 0);
+    return 0;
+}
+
 static DWORD WINAPI plThread(LPVOID unused)
 {
     char cmd[1500], raw[200], enc[600];
@@ -449,16 +470,6 @@ static void initCats(void)
 #ifdef CAT6_NAME
     addCat(CAT6_NAME, CAT6_CODE);
 #endif
-}
-
-static COLORREF catColor(int i)
-{
-    static const int c[MAX_CAT][3] = {
-        {255, 70, 130}, {80, 170, 255}, {90, 220, 140},
-        {255, 170, 60}, {170, 110, 255}, {240, 220, 80}
-    };
-    i = (i < 0 ? 0 : i) % MAX_CAT;
-    return RGB(c[i][0], c[i][1], c[i][2]);
 }
 
 static void mci(const char *cmd, char *ret, int n)
@@ -608,7 +619,6 @@ static void goBack(void)
 {
     stopTrack();
     screen = SCR_CATS;
-    accent = RGB(255, 70, 130);
     codeLen = 0; codeInput[0] = 0;
     info[0] = 0;
     drag = H_NONE;
@@ -622,7 +632,6 @@ static void enterCat(int i)
     codeLen = 0; codeInput[0] = 0;
     info[0] = 0;
     if (catLocked[i]) strcpy(info, "Trop d'essais : relance l'application");
-    accent = catColor(i);
     screen = SCR_CODE;
 }
 
@@ -757,11 +766,38 @@ static void drawBg(HDC d, int w, int h)
     }
 }
 
+static COLORREF mixCol(COLORREF a, COLORREF b, int pct)
+{
+    int r = (GetRValue(a) * (100 - pct) + GetRValue(b) * pct) / 100;
+    int g = (GetGValue(a) * (100 - pct) + GetGValue(b) * pct) / 100;
+    int bl = (GetBValue(a) * (100 - pct) + GetBValue(b) * pct) / 100;
+    return RGB(r, g, bl);
+}
+
+static void frame(HDC d, const RECT *r, COLORREF c, int w, int rad)
+{
+    HPEN p = CreatePen(PS_SOLID, w, c);
+    HGDIOBJ op = SelectObject(d, p);
+    HGDIOBJ ob = SelectObject(d, GetStockObject(NULL_BRUSH));
+    RoundRect(d, r->left, r->top, r->right, r->bottom, rad, rad);
+    SelectObject(d, op); SelectObject(d, ob);
+    DeleteObject(p);
+}
+
+static void pill(HDC d, const RECT *r, const char *label, COLORREF col, int a, int isHot)
+{
+    RECT rr = *r;
+    int al = isHot ? (a + 55 > 255 ? 255 : a + 55) : a;
+    alphaRectR(d, &rr, col, al, (rr.bottom - rr.top) / 2);
+    txtShadow(d, label, rr.left, rr.top, rr.right - rr.left, rr.bottom - rr.top,
+              fMidB, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
 static void card(HDC d, const RECT *pr, const char *label, COLORREF col, int isHot)
 {
     RECT r = *pr;
     RECT stripe;
-    panel(d, &r, isHot ? RGB(255, 255, 255) : col, isHot ? 215 : 170, isHot ? 3 : 2);
+    panel(d, &r, isHot ? RGB(255, 255, 255) : mixCol(col, RGB(0, 0, 0), 35), isHot ? 215 : 150, isHot ? 3 : 2);
     stripe.left = r.left + 14; stripe.right = r.left + (isHot ? 24 : 19);
     stripe.top = r.top + 12;   stripe.bottom = r.bottom - 12;
     alphaRect(d, &stripe, col, 255);
@@ -846,8 +882,8 @@ static void layout(void)
         }
         nbtn = ncat;
     } else if (screen == SCR_CODE) {
-        btn[0].left = 380; btn[0].top = 400; btn[0].right = 580; btn[0].bottom = 448;
-        btn[1].left = 380; btn[1].top = 460; btn[1].right = 580; btn[1].bottom = 508;
+        btn[0].left = 300; btn[0].top = 384; btn[0].right = 660; btn[0].bottom = 430;
+        btn[1].left = 300; btn[1].top = 440; btn[1].right = 660; btn[1].bottom = 486;
         nbtn = 2;
     } else if (screen == SCR_LIST) {
         rBack.left = 760; rBack.top = 62; rBack.right = 900; rBack.bottom = 104;
@@ -873,40 +909,77 @@ static void drawCatScreen(HDC d)
     txt(d, "Choisis ta categorie", 0, 148, WIN_W, 28, fMid, RGB(220, 220, 235), DT_CENTER | DT_SINGLELINE);
 
     for (i = 0; i < ncat; i++)
-        card(d, &btn[i], cats[i].name, catColor(i), hot == i);
+        card(d, &btn[i], cats[i].name, accent, hot == i);
+}
+
+static void drawLock(HDC d, int cx, int cy, COLORREF c)
+{
+    HPEN p = CreatePen(PS_SOLID, 4, c);
+    HBRUSH b = CreateSolidBrush(c);
+    HGDIOBJ op = SelectObject(d, p);
+    HGDIOBJ ob = SelectObject(d, GetStockObject(NULL_BRUSH));
+    RECT k;
+
+    Ellipse(d, cx - 12, cy - 22, cx + 12, cy + 6);
+    SelectObject(d, b);
+    SelectObject(d, GetStockObject(NULL_PEN));
+    RoundRect(d, cx - 18, cy - 4, cx + 18, cy + 22, 8, 8);
+    SelectObject(d, op); SelectObject(d, ob);
+    DeleteObject(p); DeleteObject(b);
+
+    k.left = cx - 4; k.right = cx + 4; k.top = cy + 3; k.bottom = cy + 11;
+    circle(d, &k, RGB(20, 20, 30), RGB(20, 20, 30));
 }
 
 static void drawCodeScreen(HDC d)
 {
-    char show[64];
-    RECT box;
-    int i, p = 0, lim, sep;
+    RECT pn, s, u, k;
+    int i, lim, sw, gap, total, x0, y0, caret, w;
+    COLORREF edge;
 
     if (selCat < 0 || selCat >= ncat) return;
 
-    txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, accent, DT_CENTER | DT_SINGLELINE);
-    txtShadow(d, cats[selCat].name, 0, 150, WIN_W, 44, fBig, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
-    txt(d, "Entre ton code d'acces", 0, 200, WIN_W, 28, fMid, RGB(220, 220, 235), DT_CENTER | DT_SINGLELINE);
+    pn.left = 240; pn.top = 100; pn.right = 720; pn.bottom = 520;
+    w = pn.right - pn.left;
+    panel(d, &pn, mixCol(accent, RGB(0, 0, 0), 35), 140, 2);
 
-    box.left = 180; box.top = 250; box.right = 780; box.bottom = 340;
-    panel(d, &box, accent, 190, 3);
+    drawLock(d, WIN_W / 2, 150, accent);
+    txtShadow(d, cats[selCat].name, pn.left, 188, w, 44, fBig, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
+    txt(d, "Entre ton code d'acces", pn.left, 236, w, 26, fMid, RGB(215, 215, 235), DT_CENTER | DT_SINGLELINE);
 
     lim = (int)strlen(cats[selCat].code);
-    sep = lim <= 8 ? 2 : 1;
-    for (i = 0; i < lim && p < 56; i++) {
-        show[p++] = i < codeLen ? '*' : '_';
-        show[p++] = ' ';
-        if (sep == 2) show[p++] = ' ';
-    }
-    show[p] = 0;
-    txt(d, show, box.left, box.top, box.right - box.left, box.bottom - box.top,
-        fMono, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    gap = 8;
+    sw = (440 - (lim - 1) * gap) / lim;
+    if (sw > 46) sw = 46;
+    total = lim * sw + (lim - 1) * gap;
+    x0 = (WIN_W - total) / 2;
+    y0 = 280;
+    caret = (int)((GetTickCount() / 500) % 2);
 
-    card(d, &btn[0], "VALIDER", accent, hot == 0);
-    card(d, &btn[1], "RETOUR", RGB(140, 140, 170), hot == 1);
+    for (i = 0; i < lim; i++) {
+        s.left = x0 + i * (sw + gap); s.right = s.left + sw; s.top = y0; s.bottom = y0 + 56;
+        alphaRectR(d, &s, RGB(255, 255, 255), i < codeLen ? 55 : 25, 10);
+        if (i == codeLen) edge = accent;
+        else if (i < codeLen) edge = mixCol(accent, RGB(0, 0, 0), 20);
+        else edge = mixCol(accent, RGB(0, 0, 0), 60);
+        frame(d, &s, edge, 2, 16);
+        if (i < codeLen) {
+            int cx = (s.left + s.right) / 2, cy = (s.top + s.bottom) / 2;
+            k.left = cx - 6; k.right = cx + 6; k.top = cy - 6; k.bottom = cy + 6;
+            circle(d, &k, RGB(255, 255, 255), accent);
+        } else if (i == codeLen && caret) {
+            u.left = s.left + 8; u.right = s.right - 8; u.top = s.bottom - 11; u.bottom = s.bottom - 8;
+            alphaRect(d, &u, accent, 255);
+        }
+    }
 
     if (info[0])
-        txt(d, info, 0, 520, WIN_W, 30, fMid, RGB(255, 110, 110), DT_CENTER | DT_SINGLELINE);
+        txt(d, info, pn.left, 346, w, 26, fMid, RGB(255, 120, 120), DT_CENTER | DT_SINGLELINE);
+
+    pill(d, &btn[0], "VALIDER", mixCol(accent, RGB(0, 0, 0), 35), 215, hot == 0);
+    pill(d, &btn[1], "RETOUR", RGB(255, 255, 255), 40, hot == 1);
+
+    txt(d, "Ctrl+V pour coller le code", pn.left, 494, w, 20, fSm, RGB(170, 170, 195), DT_CENTER | DT_SINGLELINE);
 }
 
 static void drawNow(HDC d)
@@ -1127,6 +1200,108 @@ static void draw(HDC d, int w, int h)
     drawTitleBar(d, w, h);
 }
 
+static COLORREF bgAccent(void)
+{
+    BITMAP bm;
+    int x, y, step, bpp;
+    double sr = 0, sg = 0, sb = 0, sw = 0, mx;
+
+    if (!bg) return RGB(230, 230, 245);
+    memset(&bm, 0, sizeof bm);
+    GetObjectA(bg, sizeof bm, &bm);
+    if (!bm.bmBits || bm.bmWidth <= 0 || bm.bmHeight <= 0 ||
+        (bm.bmBitsPixel != 24 && bm.bmBitsPixel != 32))
+        return RGB(230, 230, 245);
+    bpp = bm.bmBitsPixel / 8;
+    step = bm.bmWidth / 160;
+    if (step < 1) step = 1;
+    for (y = 0; y < bm.bmHeight; y += step) {
+        const unsigned char *row = (const unsigned char *)bm.bmBits + (size_t)y * bm.bmWidthBytes;
+        for (x = 0; x < bm.bmWidth; x += step) {
+            const unsigned char *px = row + x * bpp;
+            int b = px[0], g = px[1], r = px[2];
+            int hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
+            int lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
+            double w;
+            if (hi < 40) continue;
+            w = (double)(hi - lo);
+            w = w * w + 1.0;
+            sr += r * w; sg += g * w; sb += b * w; sw += w;
+        }
+    }
+    if (sw <= 0) return RGB(230, 230, 245);
+    sr /= sw; sg /= sw; sb /= sw;
+    mx = sr > sg ? (sr > sb ? sr : sb) : (sg > sb ? sg : sb);
+    if (mx < 1) return RGB(230, 230, 245);
+    sr = sr * 225.0 / mx;
+    sg = sg * 225.0 / mx;
+    sb = sb * 225.0 / mx;
+    return RGB((int)sr, (int)sg, (int)sb);
+}
+
+static void loadBg(const char *path)
+{
+    HBITMAP nb;
+    BITMAP bm;
+
+    nb = (HBITMAP)LoadImageA(NULL, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+    if (!nb) return;
+    memset(&bm, 0, sizeof bm);
+    GetObjectA(nb, sizeof(BITMAP), &bm);
+    if (bm.bmWidth <= 0 || bm.bmHeight <= 0) { DeleteObject(nb); return; }
+    if (bg) DeleteObject(bg);
+    bg = nb;
+    bgW = bm.bmWidth; bgH = bm.bmHeight;
+    accent = bgAccent();
+}
+
+typedef BOOL (WINAPI *CLIPOPENFN)(HWND);
+typedef HANDLE (WINAPI *CLIPGETFN)(UINT);
+typedef BOOL (WINAPI *CLIPCLOSEFN)(void);
+typedef void *(WINAPI *GLOCKFN)(HANDLE);
+typedef BOOL (WINAPI *GUNLOCKFN)(HANDLE);
+
+static void pasteCode(void)
+{
+    HMODULE u, k;
+    CLIPOPENFN pOpen;
+    CLIPGETFN pGet;
+    CLIPCLOSEFN pClose;
+    GLOCKFN pLock;
+    GUNLOCKFN pUnlock;
+    HANDLE hm;
+    int lim;
+
+    if (selCat < 0 || selCat >= ncat || catLocked[selCat]) return;
+    u = LoadLibraryA("user32.dll");
+    k = LoadLibraryA("kernel32.dll");
+    if (!u || !k) return;
+    pOpen   = (CLIPOPENFN)GetProcAddress(u, "OpenClipboard");
+    pGet    = (CLIPGETFN)GetProcAddress(u, "GetClipboardData");
+    pClose  = (CLIPCLOSEFN)GetProcAddress(u, "CloseClipboard");
+    pLock   = (GLOCKFN)GetProcAddress(k, "GlobalLock");
+    pUnlock = (GUNLOCKFN)GetProcAddress(k, "GlobalUnlock");
+    if (!pOpen || !pGet || !pClose || !pLock || !pUnlock) return;
+
+    lim = (int)strlen(cats[selCat].code);
+    if (!pOpen(hwnd)) return;
+    hm = pGet(CLIP_TEXT);
+    if (hm) {
+        const char *t = (const char *)pLock(hm);
+        if (t) {
+            codeLen = 0;
+            codeInput[0] = 0;
+            for (; *t && codeLen < lim; t++)
+                if ((unsigned char)*t > 32 && (unsigned char)*t < 127)
+                    codeInput[codeLen++] = *t;
+            codeInput[codeLen] = 0;
+            info[0] = 0;
+            pUnlock(hm);
+        }
+    }
+    pClose();
+}
+
 static int PT(const RECT *r, int x, int y)
 {
     return x >= r->left && x < r->right && y >= r->top && y < r->bottom;
@@ -1174,7 +1349,6 @@ static void submitCode(void)
     if (strcmp(codeInput, good) == 0) {
         info[0] = 0;
         strcpy(catName, cats[selCat].name);
-        accent = catColor(selCat);
         codeLen = 0; codeInput[0] = 0;
         screen = SCR_LIST;
         startPlaylist();
@@ -1305,7 +1479,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_KEYDOWN:
-        if (screen == SCR_LIST) {
+        if (screen == SCR_CODE) {
+            if ((wp == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) ||
+                (wp == VK_INSERT && (GetKeyState(VK_SHIFT) & 0x8000))) {
+                pasteCode();
+                InvalidateRect(h, NULL, FALSE);
+            }
+        } else if (screen == SCR_LIST) {
             if (wp == VK_SPACE) togglePlay();
             else if (wp == VK_RIGHT) nextTrack();
             else if (wp == VK_LEFT) prevTrack();
@@ -1330,6 +1510,12 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         InvalidateRect(h, NULL, FALSE);
         return 0;
 
+    case WM_BG_DONE:
+        if (wp && bgTmp[0]) loadBg(bgTmp);
+        if (bgTmp[0]) remove(bgTmp);
+        InvalidateRect(h, NULL, FALSE);
+        return 0;
+
     case WM_CFG_DONE:
         if (cfgN > 0) {
             int i;
@@ -1337,7 +1523,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
             ncat = cfgN;
             if (screen == SCR_CODE) {
                 screen = SCR_CATS;
-                accent = RGB(255, 70, 130);
                 codeLen = 0; codeInput[0] = 0;
                 info[0] = 0;
             }
@@ -1358,11 +1543,12 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
                 else nextTrack();
             }
         }
-        if (screen == SCR_LIST) InvalidateRect(h, NULL, FALSE);
+        if (screen == SCR_LIST || screen == SCR_CODE) InvalidateRect(h, NULL, FALSE);
         return 0;
 
     case WM_DESTROY:
         stopTrack();
+        if (bgTmp[0]) remove(bgTmp);
         if (memBmp) DeleteObject(memBmp);
         if (memDC) DeleteDC(memDC);
         PostQuitMessage(0);
@@ -1393,15 +1579,8 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
     m = LoadLibraryA("winmm.dll");
     if (m) pMci = (MCIFN)GetProcAddress(m, "mciSendStringA");
 
-    accent = RGB(255, 70, 130);
-
-    bg = (HBITMAP)LoadImageA(NULL, "fond.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
-    if (bg) {
-        BITMAP bm;
-        GetObjectA(bg, sizeof(BITMAP), &bm);
-        bgW = bm.bmWidth; bgH = bm.bmHeight;
-        if (bgW <= 0 || bgH <= 0) { DeleteObject(bg); bg = NULL; }
-    }
+    accent = RGB(230, 230, 245);
+    loadBg("fond.bmp");
 
     fTitle = mkfont(54, 1, "Segoe UI");
     fBig   = mkfont(30, 1, "Segoe UI");
@@ -1453,6 +1632,10 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
 
     if (!strstr(GH_USER, "TONPSEUDO")) {
         th = CreateThread(NULL, 0, cfgThread, NULL, 0, NULL);
+        if (th) CloseHandle(th);
+        GetTempPathA(MAX_PATH - 40, bgTmp);
+        sprintf(bgTmp + strlen(bgTmp), "sm_bg_%lu.bmp", (unsigned long)GetCurrentProcessId());
+        th = CreateThread(NULL, 0, bgThread, NULL, 0, NULL);
         if (th) CloseHandle(th);
     }
 
