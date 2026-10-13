@@ -430,7 +430,7 @@ static DWORD WINAPI updThread(LPVOID unused)
     sprintf(oldp, "%s.old", selfPath);
     DeleteFileA(oldp);
 
-    sprintf(m, "Version %d - recherche de mise a jour...", APP_BUILD);
+    sprintf(m, "ShinraMusic - recherche de mise a jour...", APP_BUILD);
     updNote(m);
 
     sprintf(cmd, "curl.exe -s -f -L -m 15 \"https://github.com/%s/%s/releases/latest/download/version.txt\"",
@@ -438,17 +438,17 @@ static DWORD WINAPI updThread(LPVOID unused)
     out[0] = 0;
     rc = runCapture(cmd, out, sizeof out);
     if (rc == 22) {
-        sprintf(m, "Version %d - mise a jour introuvable (depot public ? release ?)", APP_BUILD);
+        sprintf(m, "ShinraMusic - mise a jour introuvable (depot public ? release ?)", APP_BUILD);
         updNote(m);
         return 0;
     }
     if (rc != 0 || !out[0]) {
-        sprintf(m, "Version %d - mise a jour injoignable (internet ?)", APP_BUILD);
+        sprintf(m, "ShinraMusic - mise a jour injoignable (internet ?)", APP_BUILD);
         updNote(m);
         return 0;
     }
     if (out[0] < '0' || out[0] > '9') {
-        sprintf(m, "Version %d - mise a jour illisible", APP_BUILD);
+        sprintf(m, "ShinraMusic - mise a jour illisible", APP_BUILD);
         updNote(m);
         return 0;
     }
@@ -459,13 +459,13 @@ static DWORD WINAPI updThread(LPVOID unused)
         return 0;
     }
 
-    sprintf(m, "Version %d - nouvelle version %d, telechargement...", APP_BUILD, remote);
+    sprintf(m, "ShinraMusic - nouvelle ShinraMusic, telechargement...", APP_BUILD, remote);
     updNote(m);
     sprintf(cmd, "curl.exe -s -f -L -m 120 -o \"%s\" \"https://github.com/%s/%s/releases/latest/download/ShinraMusic.exe\"",
             updTmp, GH_USER, GH_REPO);
     if (runCapture(cmd, NULL, 0) != 0) {
         remove(updTmp);
-        sprintf(m, "Version %d - telechargement impossible", APP_BUILD);
+        sprintf(m, "ShinraMusic - telechargement impossible", APP_BUILD);
         updNote(m);
         return 0;
     }
@@ -479,12 +479,12 @@ static DWORD WINAPI updThread(LPVOID unused)
     }
     if (sz < 30000 || hdr[0] != 'M' || hdr[1] != 'Z') {
         remove(updTmp);
-        sprintf(m, "Version %d - fichier de mise a jour invalide", APP_BUILD);
+        sprintf(m, "ShinraMusic - fichier de mise a jour invalide", APP_BUILD);
         updNote(m);
         return 0;
     }
 
-    sprintf(m, "Version %d - mise a jour %d prete", APP_BUILD, remote);
+    sprintf(m, "ShinraMusic - mise a jour %d prete", APP_BUILD, remote);
     updNote(m);
     PostMessageA(hwnd, WM_UPD_READY, 0, 0);
     return 0;
@@ -1746,7 +1746,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
 
     srand((unsigned)GetTickCount());
     initCats();
-    sprintf(updMsg, "Version %d", APP_BUILD);
+    sprintf(updMsg, "ShinraMusic", APP_BUILD);
 
     icoBig = (HICON)LoadImageA(hi, MAKEINTRESOURCE(1), IMAGE_ICON,
                                GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
