@@ -72,8 +72,10 @@
 
 static HICON icoBig = NULL, icoSm = NULL;
 
+#ifdef __TINYC__
 int WINAPI MultiByteToWideChar(UINT, DWORD, const char *, int, unsigned short *, int);
 int WINAPI WideCharToMultiByte(UINT, DWORD, const unsigned short *, int, char *, int, const char *, int *);
+#endif
 
 #define WIN_W    960
 #define WIN_H    620
@@ -89,6 +91,17 @@ int WINAPI WideCharToMultiByte(UINT, DWORD, const unsigned short *, int, char *,
 #define WM_CFG_DONE (WM_APP + 3)
 #define WM_BG_DONE  (WM_APP + 4)
 #define CLIP_TEXT   1
+#define WM_UPD_READY (WM_APP + 5)
+
+#ifndef APP_BUILD
+#define APP_BUILD 0
+#endif
+#ifndef MOVEFILE_REPLACE_EXISTING
+#define MOVEFILE_REPLACE_EXISTING 0x00000001
+#endif
+#ifndef MOVEFILE_COPY_ALLOWED
+#define MOVEFILE_COPY_ALLOWED 0x00000002
+#endif
 
 #ifndef VK_INSERT
 #define VK_INSERT 0x2D
@@ -114,6 +127,9 @@ static int     bgW = 0, bgH = 0;
 static HFONT   fTitle, fBig, fMid, fMidB, fSm, fMono;
 static COLORREF accent;
 static char    bgTmp[MAX_PATH] = "";
+static char    selfPath[MAX_PATH] = "";
+static char    updTmp[MAX_PATH] = "";
+static int     updPending = 0;
 
 static char    codeInput[CODE_MAX + 2];
 static int     codeLen = 0;
@@ -380,6 +396,42 @@ static DWORD WINAPI bgThread(LPVOID unused)
     return 0;
 }
 
+static DWORD WINAPI updThread(LPVOID unused)
+{
+    char cmd[900], out[64], oldp[MAX_PATH + 8];
+    int remote;
+    FILE *f;
+    long sz = 0;
+    unsigned char hdr[2] = { 0, 0 };
+    (void)unused;
+
+    sprintf(oldp, "%s.old", selfPath);
+    DeleteFileA(oldp);
+
+    sprintf(cmd, "curl.exe -s -L -m 15 \"https://github.com/%s/%s/releases/latest/download/version.txt\"",
+            GH_USER, GH_REPO);
+    out[0] = 0;
+    if (runCapture(cmd, out, sizeof out) != 0 || !out[0]) return 0;
+    remote = atoi(out);
+    if (remote <= APP_BUILD) return 0;
+
+    sprintf(cmd, "curl.exe -s -L -m 120 -o \"%s\" \"https://github.com/%s/%s/releases/latest/download/ShinraMusic.exe\"",
+            updTmp, GH_USER, GH_REPO);
+    if (runCapture(cmd, NULL, 0) != 0) { remove(updTmp); return 0; }
+
+    f = fopen(updTmp, "rb");
+    if (f) {
+        if (fread(hdr, 1, 2, f) != 2) hdr[0] = 0;
+        fseek(f, 0, SEEK_END);
+        sz = ftell(f);
+        fclose(f);
+    }
+    if (sz < 100000 || hdr[0] != 'M' || hdr[1] != 'Z') { remove(updTmp); return 0; }
+
+    PostMessageA(hwnd, WM_UPD_READY, 0, 0);
+    return 0;
+}
+
 static DWORD WINAPI plThread(LPVOID unused)
 {
     char cmd[1500], raw[200], enc[600];
@@ -601,6 +653,32 @@ static void seekTo(int x)
     playing = 1;
 }
 
+static void applyUpdate(void)
+{
+    char oldp[MAX_PATH + 8];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+
+    updPending = 0;
+    if (!selfPath[0] || !updTmp[0]) return;
+    sprintf(oldp, "%s.old", selfPath);
+    DeleteFileA(oldp);
+    if (!MoveFileExA(selfPath, oldp, MOVEFILE_REPLACE_EXISTING)) { remove(updTmp); return; }
+    if (!MoveFileExA(updTmp, selfPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+        MoveFileExA(oldp, selfPath, MOVEFILE_REPLACE_EXISTING);
+        remove(updTmp);
+        return;
+    }
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    memset(&pi, 0, sizeof pi);
+    if (CreateProcessA(selfPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        PostMessageA(hwnd, WM_CLOSE, 0, 0);
+    }
+}
+
 static void startPlaylist(void)
 {
     HANDLE th;
@@ -623,6 +701,7 @@ static void goBack(void)
     info[0] = 0;
     drag = H_NONE;
     hot = H_NONE;
+    if (updPending) applyUpdate();
 }
 
 static void enterCat(int i)
@@ -1510,6 +1589,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         InvalidateRect(h, NULL, FALSE);
         return 0;
 
+    case WM_UPD_READY:
+        if (screen == SCR_CATS && !isOpen) applyUpdate();
+        else updPending = 1;
+        return 0;
+
     case WM_BG_DONE:
         if (wp && bgTmp[0]) loadBg(bgTmp);
         if (bgTmp[0]) remove(bgTmp);
@@ -1549,6 +1633,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     case WM_DESTROY:
         stopTrack();
         if (bgTmp[0]) remove(bgTmp);
+        if (updTmp[0]) remove(updTmp);
         if (memBmp) DeleteObject(memBmp);
         if (memDC) DeleteDC(memDC);
         PostQuitMessage(0);
@@ -1573,6 +1658,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
     SetUnhandledExceptionFilter(crashHandler);
 
     GetModuleFileNameA(NULL, exe, MAX_PATH);
+    strcpy(selfPath, exe);
     slash = strrchr(exe, '\\');
     if (slash) { *slash = 0; SetCurrentDirectoryA(exe); }
 
@@ -1636,6 +1722,10 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cl, int sw)
         GetTempPathA(MAX_PATH - 40, bgTmp);
         sprintf(bgTmp + strlen(bgTmp), "sm_bg_%lu.bmp", (unsigned long)GetCurrentProcessId());
         th = CreateThread(NULL, 0, bgThread, NULL, 0, NULL);
+        if (th) CloseHandle(th);
+        GetTempPathA(MAX_PATH - 40, updTmp);
+        sprintf(updTmp + strlen(updTmp), "sm_upd_%lu.exe", (unsigned long)GetCurrentProcessId());
+        th = CreateThread(NULL, 0, updThread, NULL, 0, NULL);
         if (th) CloseHandle(th);
     }
 
