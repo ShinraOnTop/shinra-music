@@ -40,6 +40,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${{ github.run_number }}" ShinraMusic.exe version.txt \
-            --title "ShinraMusic build ${{ github.run_number }}" \
-            --notes "Build automatique" --latest
+          TAG="build-${{ github.run_number }}"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" ShinraMusic.exe version.txt --clobber
+          else
+            gh release create "$TAG" ShinraMusic.exe version.txt \
+              --title "ShinraMusic build ${{ github.run_number }}" \
+              --notes "Build automatique" --latest
+          fi
