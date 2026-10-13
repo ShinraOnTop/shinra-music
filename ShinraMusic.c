@@ -454,7 +454,7 @@ static DWORD WINAPI updThread(LPVOID unused)
     }
     remote = atoi(out);
     if (remote <= APP_BUILD) {
-        sprintf(m, "Version %d a jour", APP_BUILD);
+        sprintf(m, "ShinraMusic a jour");
         updNote(m);
         return 0;
     }
@@ -1084,8 +1084,6 @@ static void drawCatScreen(HDC d)
     txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
     bar.left = WIN_W / 2 - 70; bar.right = WIN_W / 2 + 70; bar.top = 139; bar.bottom = 142;
     alphaRect(d, &bar, accent, 255);
-
-    txtShadow(d, "Choisis ta cat\xe9gorie", 0, 150, WIN_W, 30, fMid, RGB(230, 230, 245), DT_CENTER | DT_SINGLELINE);
 
     for (i = 0; i < ncat; i++)
         card(d, &btn[i], cats[i].name, accent, hot == i);
