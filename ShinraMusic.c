@@ -7,7 +7,7 @@
 
 #define GH_USER   "ShinraOnTop"
 #define GH_REPO   "shinra-music"
-#define GH_DIR    "musique"
+#define GH_DIR    "Musique"
 #define GH_BRANCH "main"
 #define GH_SRC    "ShinraMusic.c"
 #define GH_BG     "fond.bmp"
@@ -90,21 +90,16 @@ int WINAPI WideCharToMultiByte(UINT, DWORD, const unsigned short *, int, char *,
 #define WM_PL_DONE  (WM_APP + 2)
 #define WM_CFG_DONE (WM_APP + 3)
 #define WM_BG_DONE  (WM_APP + 4)
-#define CLIP_TEXT   1
 #define WM_UPD_READY (WM_APP + 5)
 
 #ifndef APP_BUILD
-#define APP_BUILD 0
+#define APP_BUILD 8
 #endif
 #ifndef MOVEFILE_REPLACE_EXISTING
 #define MOVEFILE_REPLACE_EXISTING 0x00000001
 #endif
 #ifndef MOVEFILE_COPY_ALLOWED
 #define MOVEFILE_COPY_ALLOWED 0x00000002
-#endif
-
-#ifndef VK_INSERT
-#define VK_INSERT 0x2D
 #endif
 
 typedef DWORD (WINAPI *MCIFN)(const char *, char *, UINT, void *);
@@ -440,7 +435,7 @@ static DWORD WINAPI updThread(LPVOID unused)
     }
     remote = atoi(out);
     if (remote <= APP_BUILD) {
-        sprintf(m, "Version %d - a jour", APP_BUILD);
+        sprintf(m, "Version %d a jour", APP_BUILD);
         updNote(m);
         return 0;
     }
@@ -479,6 +474,8 @@ static DWORD WINAPI updThread(LPVOID unused)
 static DWORD WINAPI plThread(LPVOID unused)
 {
     char cmd[1500], raw[200], enc[600];
+    const char *dirs[3];
+    int a, k, dup;
     (void)unused;
 
     tn = 0;
@@ -487,19 +484,27 @@ static DWORD WINAPI plThread(LPVOID unused)
         strcpy(plErr, "Renseigne GH_USER et GH_REPO en haut de ShinraMusic.c");
         goto done;
     }
-    if (GH_DIR[0]) sprintf(raw, "%s/%s", GH_DIR, catName);
-    else           strcpy(raw, catName);
-    urlEnc(raw, enc, sizeof enc);
-    sprintf(cmd, "curl.exe -s -L -m 25 -H \"User-Agent: ShinraMusic\" "
-                 "-H \"Accept: application/vnd.github+json\" "
-                 "\"https://api.github.com/repos/%s/%s/contents/%s\"",
-            GH_USER, GH_REPO, enc);
-    if (runCapture(cmd, netBuf, sizeof netBuf) != 0 || !netBuf[0]) {
-        strcpy(plErr, "GitHub injoignable (internet ?)");
-        goto done;
+    dirs[0] = GH_DIR; dirs[1] = "Musique"; dirs[2] = "musique";
+    for (a = 0; a < 3; a++) {
+        dup = 0;
+        for (k = 0; k < a; k++) if (!strcmp(dirs[k], dirs[a])) dup = 1;
+        if (dup) continue;
+        if (dirs[a][0]) sprintf(raw, "%s/%s", dirs[a], catName);
+        else            strcpy(raw, catName);
+        urlEnc(raw, enc, sizeof enc);
+        sprintf(cmd, "curl.exe -s -L -m 25 -H \"User-Agent: ShinraMusic\" "
+                     "-H \"Accept: application/vnd.github+json\" "
+                     "\"https://api.github.com/repos/%s/%s/contents/%s\"",
+                GH_USER, GH_REPO, enc);
+        tn = 0;
+        if (runCapture(cmd, netBuf, sizeof netBuf) != 0 || !netBuf[0]) {
+            strcpy(plErr, "GitHub injoignable (internet ?)");
+            goto done;
+        }
+        compactJson(netBuf);
+        parseGithub(netBuf);
+        if (tn > 0) break;
     }
-    compactJson(netBuf);
-    parseGithub(netBuf);
     if (tn == 0) {
         if (strstr(netBuf, "rate limit"))
             strcpy(plErr, "Limite GitHub atteinte (r\xe9" "essaie dans un moment)");
@@ -866,8 +871,18 @@ static void panel(HDC d, const RECT *pr, COLORREF border, int a, int bw)
     DeleteObject(p);
 }
 
+/* Le fond (image etiree + assombrissement) est calcule UNE seule fois puis
+   recopie a chaque image : plus de fond noir ni de saccades au mouvement
+   de la souris. */
+static unsigned int *bgCache = NULL;
+static int bgDirty = 1;
+
 static void drawBg(HDC d, int w, int h)
 {
+    size_t bytes = (size_t)w * h * 4, n = (size_t)w * h, i;
+    if (!pixels) return;
+    if (!bgDirty && bgCache) { memcpy(pixels, bgCache, bytes); return; }
+
     if (bg) {
         HDC s = CreateCompatibleDC(d);
         HGDIOBJ o = SelectObject(s, bg);
@@ -888,6 +903,21 @@ static void drawBg(HDC d, int w, int h)
             FillRect(d, &r, b);
             DeleteObject(b);
         }
+    }
+    GdiFlush();
+
+    if (!bgCache) bgCache = (unsigned int *)malloc(bytes);
+    if (bgCache) {
+        memcpy(bgCache, pixels, bytes);
+        for (i = 0; i < n; i++) {
+            unsigned p = bgCache[i];
+            unsigned r = ((p >> 16) & 255) * 155 / 255;
+            unsigned g = ((p >> 8) & 255) * 155 / 255;
+            unsigned b = (p & 255) * 155 / 255;
+            bgCache[i] = (r << 16) | (g << 8) | b;
+        }
+        memcpy(pixels, bgCache, bytes);
+        bgDirty = 0;
     }
 }
 
@@ -1035,13 +1065,13 @@ static void drawCatScreen(HDC d)
     txtShadow(d, "ShinraMusic", 0, 70, WIN_W, 90, fTitle, RGB(255, 255, 255), DT_CENTER | DT_SINGLELINE);
     bar.left = WIN_W / 2 - 70; bar.right = WIN_W / 2 + 70; bar.top = 139; bar.bottom = 142;
     alphaRect(d, &bar, accent, 255);
-    txt(d, "Choisis ta categorie", 0, 150, WIN_W, 28, fMid, RGB(230, 220, 220), DT_CENTER | DT_SINGLELINE);
+
+    txtShadow(d, "Choisis ta cat\xe9gorie", 0, 150, WIN_W, 30, fMid, RGB(230, 230, 245), DT_CENTER | DT_SINGLELINE);
 
     for (i = 0; i < ncat; i++)
         card(d, &btn[i], cats[i].name, accent, hot == i);
 
-    if (updMsg[0])
-        txt(d, updMsg, 0, 588, WIN_W, 20, fSm, RGB(175, 165, 165), DT_CENTER | DT_SINGLELINE);
+    txtShadow(d, updMsg, 0, WIN_H - 40, WIN_W, 24, fSm, RGB(215, 215, 235), DT_CENTER | DT_SINGLELINE);
 }
 
 static void drawLock(HDC d, int cx, int cy, COLORREF c)
@@ -1111,8 +1141,6 @@ static void drawCodeScreen(HDC d)
     pill(d, &btn[0], "VALIDER", accent, 235, hot == 0);
     pill(d, &btn[1], "RETOUR", RGB(0, 0, 0), 100, hot == 1);
     frame(d, &btn[1], mixCol(accent, RGB(0, 0, 0), hot == 1 ? 0 : 55), 2, 46);
-
-    txt(d, "Ctrl+V pour coller le code", pn.left, 494, w, 20, fSm, RGB(170, 170, 195), DT_CENTER | DT_SINGLELINE);
 }
 
 static void drawNow(HDC d)
@@ -1284,13 +1312,10 @@ static void drawList(HDC d)
 
 static void drawTitleBar(HDC d, int w, int h)
 {
-    RECT g;
     HPEN p, op;
     HGDIOBJ ob;
     COLORREF dim;
-    int y, cx, cy = TITLE_H / 2;
-
-    (void)g; (void)y;
+    int cx, cy = TITLE_H / 2;
 
     txtShadow(d, "ShinraMusic", 20, 0, 260, TITLE_H, fMidB, RGB(255, 255, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -1319,11 +1344,8 @@ static void drawTitleBar(HDC d, int w, int h)
 
 static void draw(HDC d, int w, int h)
 {
-    RECT full;
-    full.left = 0; full.top = 0; full.right = w; full.bottom = h;
     SetBkMode(d, TRANSPARENT);
     drawBg(d, w, h);
-    alphaRect(d, &full, RGB(0, 0, 0), 100);
     layout();
     switch (screen) {
     case SCR_CATS: drawCatScreen(d);  break;
@@ -1412,54 +1434,8 @@ static void loadBg(const char *path)
     if (bg) DeleteObject(bg);
     bg = nb;
     bgW = bm.bmWidth; bgH = bm.bmHeight;
+    bgDirty = 1;
     accent = bgAccent();
-}
-
-typedef BOOL (WINAPI *CLIPOPENFN)(HWND);
-typedef HANDLE (WINAPI *CLIPGETFN)(UINT);
-typedef BOOL (WINAPI *CLIPCLOSEFN)(void);
-typedef void *(WINAPI *GLOCKFN)(HANDLE);
-typedef BOOL (WINAPI *GUNLOCKFN)(HANDLE);
-
-static void pasteCode(void)
-{
-    HMODULE u, k;
-    CLIPOPENFN pOpen;
-    CLIPGETFN pGet;
-    CLIPCLOSEFN pClose;
-    GLOCKFN pLock;
-    GUNLOCKFN pUnlock;
-    HANDLE hm;
-    int lim;
-
-    if (selCat < 0 || selCat >= ncat || catLocked[selCat]) return;
-    u = LoadLibraryA("user32.dll");
-    k = LoadLibraryA("kernel32.dll");
-    if (!u || !k) return;
-    pOpen   = (CLIPOPENFN)GetProcAddress(u, "OpenClipboard");
-    pGet    = (CLIPGETFN)GetProcAddress(u, "GetClipboardData");
-    pClose  = (CLIPCLOSEFN)GetProcAddress(u, "CloseClipboard");
-    pLock   = (GLOCKFN)GetProcAddress(k, "GlobalLock");
-    pUnlock = (GUNLOCKFN)GetProcAddress(k, "GlobalUnlock");
-    if (!pOpen || !pGet || !pClose || !pLock || !pUnlock) return;
-
-    lim = (int)strlen(cats[selCat].code);
-    if (!pOpen(hwnd)) return;
-    hm = pGet(CLIP_TEXT);
-    if (hm) {
-        const char *t = (const char *)pLock(hm);
-        if (t) {
-            codeLen = 0;
-            codeInput[0] = 0;
-            for (; *t && codeLen < lim; t++)
-                if ((unsigned char)*t > 32 && (unsigned char)*t < 127)
-                    codeInput[codeLen++] = *t;
-            codeInput[codeLen] = 0;
-            info[0] = 0;
-            pUnlock(hm);
-        }
-    }
-    pClose();
 }
 
 static int PT(const RECT *r, int x, int y)
@@ -1639,13 +1615,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_KEYDOWN:
-        if (screen == SCR_CODE) {
-            if ((wp == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) ||
-                (wp == VK_INSERT && (GetKeyState(VK_SHIFT) & 0x8000))) {
-                pasteCode();
-                InvalidateRect(h, NULL, FALSE);
-            }
-        } else if (screen == SCR_LIST) {
+        if (screen == SCR_LIST) {
             if (wp == VK_SPACE) togglePlay();
             else if (wp == VK_RIGHT) nextTrack();
             else if (wp == VK_LEFT) prevTrack();
